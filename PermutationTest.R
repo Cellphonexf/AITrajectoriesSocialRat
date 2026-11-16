@@ -1,7 +1,7 @@
 # LLM evolutionary trajectory
 # Exact permutation tests for significant monotonic trends
 # Requires: six Results_*.xlsx workbooks in the "Outputs" folder
-# Programmed by Feng XIAO (updated on 2026-10-23)
+# Programmed by Feng XIAO (updated on 2026-11-15)
 
 # 0) Preparation
 # Load packages actually used
@@ -27,18 +27,14 @@ blue_color <- "#3b85bd"
 red_color <- "#c44942"
 reference_color <- "grey70"
 figure_base_size <- 6
-figure_columns <- 2L
+figure_columns <- 4L
 
 # 1) Data input
-# Locate the original exported workbooks; numbered copies are also supported.
+# Load original exported workbooks from Outputs.
 find_book <- function(stem) {
-  paths <- list.files(input_dir, pattern = "\\.xlsx$", full.names = TRUE)
-  names <- basename(paths)
-  hits <- paths[names == paste0(stem, ".xlsx") |
-    (startsWith(names, paste0(stem, "(")) & endsWith(names, ").xlsx"))]
-  if (length(hits) == 0) stop("Missing workbook in Outputs: ", stem, ".xlsx")
-  if (length(hits) > 1) stop("Ambiguous workbook copies for ", stem, ": ", paste(basename(hits), collapse = ", "))
-  hits[[1]]
+  path <- file.path(input_dir, paste0(stem, ".xlsx"))
+  if (!file.exists(path)) stop("Missing workbook in Outputs: ", stem, ".xlsx")
+  path
 }
 
 # 1.1) Map the original Results sheets to the corresponding nine-model values.
@@ -78,6 +74,7 @@ registry <- tibble::tribble(
   "Results_math", "Baseline_Gap_Test_Trend", "Baseline_Gap_By_Test", "Test", "BaselineGap",
   "Results_math", "Baseline_Gap_Overall_Trend", "Baseline_Gap_overall", "", "BaselineGap",
   "Results_SocialRat", "Alignment_Overall_Trend", "Alignment_Overall", "Baseline", "AlignmentPercent",
+  "Results_SocialRat", "Alignment_Difference_Trend", "Alignment_Difference", "", "AlignmentDifference",
   "Results_social_vs_nonsocial", "Alignment_Diff_Overall_Trend", "Alignment_Difference_Overall", "", "AlignmentDifference",
   "Results_social_vs_nonsocial", "Alignment_Difference_Test_Trend", "Alignment_Difference_By_Test", "Math_Test", "AlignmentDifference"
 )
@@ -208,6 +205,9 @@ if (any(selected$NeedsFullPrecisionData)) {
           "\nThese panels are flagged as UNVERIFIED. Re-export full-precision outcome values from the source R analysis to resolve.")
 }
 if (nrow(selected) == 0) stop("No originally significant tests found.")
+if (nrow(selected) != 16L) {
+  warning("Expected 16 originally significant trends, but found ", nrow(selected), ". Check updated source workbooks.")
+}
 
 # 4.1) Human-readable figure titles
 # Keep the underlying original analysis identifiers in the Excel output.
@@ -233,6 +233,15 @@ format_analysis_title <- function(book, sheet, label){
     }
     if(sheet == "Baseline_Gap_Overall_Trend") return("Mathematics: perfect-accuracy advantage")
   }
+  if(book == "Results_SocialRat"){
+    if(sheet == "Alignment_Overall_Trend"){
+      ref <- if(grepl("Human baseline", label, fixed = TRUE)) "human alignment" else "extremeness alignment"
+      return(paste0("Social rationality: overall ", ref))
+    }
+    if(sheet == "Alignment_Difference_Trend"){
+      return("Social rationality: extremeness advantage")
+    }
+  }
   if(book == "Results_social_vs_nonsocial"){
     if(sheet == "Alignment_Diff_Overall_Trend") return("Social vs. non-social: overall alignment difference")
     return("Social vs. non-social: AQuA-RAT alignment difference")
@@ -248,6 +257,12 @@ selected$PanelTitle <- vapply(seq_len(nrow(selected)), function(i){
 
 # Distinguish multiple titles automatically if future data create duplicates.
 selected$PanelTitle <- make.unique(selected$PanelTitle)
+# Wrap long titles for the four-column figure layout.
+selected$PanelTitle <- vapply(
+  selected$PanelTitle,
+  function(x) paste(strwrap(x, width = 39), collapse = "\n"),
+  character(1)
+)
 
 # 4.2) Export Excel result tables
 # Values in the original workbook are not modified.
@@ -269,7 +284,7 @@ openxlsx::write.xlsx(
 # 5) Visualization: Exact permutation distributions
 # Each panel has its own X/Y axis and title; no in-panel p or rho annotation.
 # A red vertical line marks the observed Spearman rho recomputed from Excel.
-# Seven rows x two columns for fourteen originally significant trends.
+# Four rows x four columns for sixteen originally significant trends.
 
 draw_data <- dplyr::bind_rows(result_distributions)
 
@@ -318,7 +333,7 @@ make_permutation_panel <- function(i){
 permutation_panels <- lapply(seq_len(nrow(selected)), make_permutation_panel)
 figure_rows <- ceiling(length(permutation_panels) / figure_columns)
 
-# For the current 14 significant trends the 7 x 2 grid fills exactly.
+# The panel grid adapts to the number of originally significant trends.
 Pic_permutation_complete <- patchwork::wrap_plots(
   permutation_panels,
   ncol = figure_columns,
@@ -328,12 +343,12 @@ Pic_permutation_complete <- patchwork::wrap_plots(
 print(Pic_permutation_complete)
 
 # 6) Export final combined figure
-# The width follows the main scripts; height scales to preserve panel legibility.
+# Four columns with sufficient width for readable labels and titles.
 ggsave(
   file.path(output_dir, "viso_Permutation.pdf"),
   plot = Pic_permutation_complete,
-  width = 8,
-  height = figure_rows * 1.70,
+  width = 12,
+  height = figure_rows * 2.20,
   units = "in",
   device = grDevices::pdf,
   limitsize = FALSE

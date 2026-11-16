@@ -1,13 +1,12 @@
 # LLM evolutionary trajectory
 # Overall social rationality profile
-# Dual-reference developmental analysis
 #
 # Requires:
 # "Outputs/Results_socialcue.xlsx"
 # "Outputs/Results_ToM.xlsx"
 # "Outputs/Results_moral.xlsx"
 #
-# Programmed by Feng XIAO (updated on 2026-9-6)
+# Programmed by Feng XIAO (updated on 2026-11-14)
 
 
 # 0) Preparation
@@ -52,10 +51,7 @@ add_bayesian_trend_evidence <- function(trend_table, source_data, y_col, p_col =
   p_reference <- p_col
 
   if(is.null(p_reference)){
-    p_reference <- case_when(
-      "p_adjusted" %in% names(trend_table) ~ "p_adjusted", "p_value" %in% names(trend_table) ~ "p_value",
-      "p_raw" %in% names(trend_table) ~ "p_raw", TRUE ~ NA_character_
-    )
+    p_reference <- if("p_value" %in% names(trend_table)) "p_value" else NA_character_
 
   }
   if(is.na(p_reference)){
@@ -95,8 +91,18 @@ blue_trend_color <- scales::alpha(blue_color, 0.55)
 green_trend_color <- scales::alpha(green_color, 0.55)
 
 
-# 1) Import domain-level Human-alignment results
-# Overall social rationality equally weights human alignment across the three domains.
+# 1) Import domain-level results for BOTH references.
+# Human baseline: empirical human task proportions/accuracy.
+# Extremeness alignment: existing domain-specific task references
+#   (uniform risk aversion; perfect inference accuracy; uniform utilitarian choice).
+# The 3-domain extreme-reference average is exploratory because its references
+# differ in meaning; the same equal domain weights as human alignment are used.
+standardize_baseline <- function(x){
+  dplyr::recode(as.character(x),
+                "Deterministic baseline" = "Extremeness alignment",
+                "Human baseline" = "Human baseline")
+}
+
 adaptive_overall_raw <- read.xlsx(file.path(output_dir, "Results_socialcue.xlsx"), sheet = "Alignment_Overall")
 
 adaptive_overall <- adaptive_overall_raw %>%
@@ -107,7 +113,8 @@ adaptive_overall <- adaptive_overall_raw %>%
     Baseline = as.character(Baseline),
     AlignmentPercent = as.numeric(AlignmentPercent)
   ) %>%
-  filter(Agent %in% model_order, Baseline == "Human baseline")
+  filter(Agent %in% model_order, Baseline %in% c("Human baseline", "Deterministic baseline")) %>%
+  mutate(Baseline = standardize_baseline(Baseline))
 
 # 1.2) Social inference
 social_inference_overall_raw <- read.xlsx(file.path(output_dir, "Results_ToM.xlsx"), sheet = "Alignment_Overall")
@@ -120,7 +127,8 @@ social_inference_overall <- social_inference_overall_raw %>%
     Baseline = as.character(Baseline),
     AlignmentPercent = as.numeric(AlignmentPercent)
   ) %>%
-  filter(Agent %in% model_order, Baseline == "Human baseline")
+  filter(Agent %in% model_order, Baseline %in% c("Human baseline", "Deterministic baseline")) %>%
+  mutate(Baseline = standardize_baseline(Baseline))
 
 # 1.3) Normative reasoning
 normative_overall_raw <- read.xlsx(file.path(output_dir, "Results_moral.xlsx"), sheet = "Alignment_Original")
@@ -133,7 +141,8 @@ normative_overall <- normative_overall_raw %>%
     Baseline = as.character(Baseline),
     AlignmentPercent = as.numeric(AlignmentPercent)
   ) %>%
-  filter(Agent %in% model_order, Baseline == "Human baseline")
+  filter(Agent %in% model_order, Baseline %in% c("Human baseline", "Deterministic baseline")) %>%
+  mutate(Baseline = standardize_baseline(Baseline))
 
 # 1.4) Bootstrap domain-level Human-alignment results
 # Reuse bootstrap workbooks when available; otherwise run the upstream bootstrap prefix.
@@ -155,7 +164,7 @@ load_domain_bootstrap <- function(workbook, scripts, result_object){
   stop("Bootstrap results not found in ", script)
 }
 
-adaptive_bootstrap_raw <- load_domain_bootstrap(file.path(output_dir, "Results_socialcue.xlsx"), c("DataAnalysis&Viso_socialcue(5)(1)_HolmGapAdjusted_副本.R", "DataAnalysis&Viso_socialcue(5)(1)_HolmGapAdjusted.R"), "socialcue_bootstrap_results")
+adaptive_bootstrap_raw <- load_domain_bootstrap(file.path(output_dir, "Results_socialcue.xlsx"), c("DataAnalysis&Viso_adaptiveCue.R", "DataAnalysis&Viso_socialcue_HolmGapAdjusted.R", "DataAnalysis&Viso_socialcue_HolmGapAdjusted.R"), "socialcue_bootstrap_results")
 
 adaptive_bootstrap <- adaptive_bootstrap_raw %>%
   transmute(
@@ -164,7 +173,7 @@ adaptive_bootstrap <- adaptive_bootstrap_raw %>%
   ) %>%
   filter(Agent %in% model_order, Baseline == "Human baseline")
 
-social_inference_bootstrap_raw <- load_domain_bootstrap(file.path(output_dir, "Results_ToM.xlsx"), "DataAnalysis&Viso_ToM(2).R", "tom_bootstrap_results")
+social_inference_bootstrap_raw <- load_domain_bootstrap(file.path(output_dir, "Results_ToM.xlsx"), c("DataAnalysis&Viso_socialInference.R", "DataAnalysis&Viso_ToM.R"), "tom_bootstrap_results")
 
 social_inference_bootstrap <- social_inference_bootstrap_raw %>%
   transmute(
@@ -173,7 +182,7 @@ social_inference_bootstrap <- social_inference_bootstrap_raw %>%
   ) %>%
   filter(Agent %in% model_order, Baseline == "Human baseline")
 
-normative_bootstrap_raw <- load_domain_bootstrap(file.path(output_dir, "Results_moral.xlsx"), "DataAnalysis&Viso_moral(2).R", "moral_bootstrap_results")
+normative_bootstrap_raw <- load_domain_bootstrap(file.path(output_dir, "Results_moral.xlsx"), c("DataAnalysis&Viso_normative.R", "DataAnalysis&Viso_moral.R"), "moral_bootstrap_results")
 
 normative_bootstrap <- normative_bootstrap_raw %>%
   transmute(
@@ -190,18 +199,32 @@ social_module_alignment <- bind_rows(adaptive_overall, social_inference_overall,
   arrange(Generation, Module)
 
 
-# 3) Overall Social Rationality Human alignment
-# Average adaptive-cue, social-inference and original-dilemma human alignment equally.
+# 3) Overall Social Rationality dual-reference alignment
+# Equal weights across the same 3 domains, separately for each reference.
 social_overall_alignment <- social_module_alignment %>%
-  group_by(Agent, Generation) %>%
+  group_by(Agent, Generation, Baseline) %>%
   summarise(
     N_Modules = sum(!is.na(AlignmentPercent)),
     AlignmentPercent = mean(AlignmentPercent, na.rm = TRUE),
     .groups = "drop"
   ) %>%
-  mutate(Module = "Overall social rationality", Baseline = "Human baseline") %>%
+  mutate(Module = "Overall social rationality") %>%
   select(Agent, Generation, Module, Baseline, AlignmentPercent, N_Modules) %>%
-  arrange(Generation)
+  arrange(Baseline, Generation)
+
+# Both reference profiles must include exactly all three components for each GPT model.
+if(nrow(social_module_alignment) != 9 * 3 * 2 ||
+   any(is.na(social_module_alignment$AlignmentPercent)) ||
+   any(social_overall_alignment$N_Modules != 3) ||
+   nrow(social_overall_alignment) != 9 * 2){
+  stop("Incomplete/duplicated domain reference data. Check the three input workbooks.")
+}
+
+social_human_overall_alignment <- social_overall_alignment %>%
+  filter(Baseline == "Human baseline")
+
+social_extreme_overall_alignment <- social_overall_alignment %>%
+  filter(Baseline == "Extremeness alignment")
 
 # 3.2) Bootstrap Overall Social Rationality Human alignment
 social_bootstrap_module_alignment <- bind_rows(adaptive_bootstrap, social_inference_bootstrap, normative_bootstrap) %>%
@@ -236,15 +259,15 @@ social_bootstrap_ci <- social_bootstrap_rho %>%
 
 # 4) PRIMARY developmental trend analysis
 social_human_test <- cor.test(
-  social_overall_alignment$Generation,
-  social_overall_alignment$AlignmentPercent,
+  social_human_overall_alignment$Generation,
+  social_human_overall_alignment$AlignmentPercent,
   method = "spearman",
   exact = FALSE
 )
 
 social_human_trend_result <- data.frame(
   Baseline = "Human baseline",
-  N_Models = sum(complete.cases(social_overall_alignment$Generation, social_overall_alignment$AlignmentPercent)),
+  N_Models = sum(complete.cases(social_human_overall_alignment$Generation, social_human_overall_alignment$AlignmentPercent)),
   Spearman_rho = unname(social_human_test$estimate),
   CI_Lower = social_bootstrap_ci$CI_Lower,
   CI_Upper = social_bootstrap_ci$CI_Upper,
@@ -260,35 +283,167 @@ social_human_trend_result <- data.frame(
 )
 
 
+# 4.2) PRIMARY: overall Extremeness-alignment trend
+# Existing task-specific references from the three upstream analyses.
+# Note: their original Bootstrap_alignment sheets contain HUMAN bootstrap only.
+# An extreme-reference CI is therefore not invented or substituted here.
+social_extreme_test <- cor.test(
+  social_extreme_overall_alignment$Generation,
+  social_extreme_overall_alignment$AlignmentPercent,
+  method = "spearman", exact = FALSE
+)
+
+social_extreme_trend_result <- data.frame(
+  Baseline = "Extremeness alignment",
+  N_Models = sum(complete.cases(social_extreme_overall_alignment$Generation,
+                                social_extreme_overall_alignment$AlignmentPercent)),
+  Spearman_rho = unname(social_extreme_test$estimate),
+  CI_Lower = NA_real_, CI_Upper = NA_real_,
+  CI_Method = "Not estimated: source bootstrap sheet contains human baseline only",
+  N_Boot_Valid = NA_integer_,
+  p_value = social_extreme_test$p.value,
+  Significant = social_extreme_test$p.value <= 0.050,
+  Direction = case_when(
+    unname(social_extreme_test$estimate) > 0 ~ "Increasing alignment",
+    unname(social_extreme_test$estimate) < 0 ~ "Decreasing alignment",
+    TRUE ~ "No monotonic direction"
+  )
+)
+
+
 # 5) Prepare wide Social Rationality profile
 # Wide profile for radar plots.
 social_profile <- social_module_alignment %>%
   mutate(
-    ProfileKey = case_when(
-      Module == "Adaptive cues" ~ "AdaptiveCueHuman",
-      Module == "Social inference" ~ "SocialInferenceHuman",
-      Module == "Normative reasoning" ~ "NormativeReasoningHuman"
-    )
+    DomainKey = case_when(
+      Module == "Adaptive cues" ~ "AdaptiveCue",
+      Module == "Social inference" ~ "SocialInference",
+      Module == "Normative reasoning" ~ "NormativeReasoning"
+    ),
+    ReferenceKey = ifelse(Baseline == "Human baseline", "Human", "Extreme"),
+    ProfileKey = paste0(DomainKey, ReferenceKey)
   ) %>%
   select(Agent, Generation, ProfileKey, AlignmentPercent) %>%
   pivot_wider(names_from = ProfileKey, values_from = AlignmentPercent) %>%
-  left_join(social_overall_alignment %>%
+  left_join(social_human_overall_alignment %>%
     select(Agent, OverallHumanAlignment = AlignmentPercent), by = "Agent") %>%
+  left_join(social_extreme_overall_alignment %>%
+    select(Agent, OverallExtremeAlignment = AlignmentPercent), by = "Agent") %>%
   arrange(Generation)
 
 social_human_trend_result <- add_bayesian_trend_evidence(
-  trend_table = social_human_trend_result, source_data = social_overall_alignment, y_col = "AlignmentPercent"
+  trend_table = social_human_trend_result, source_data = social_human_overall_alignment, y_col = "AlignmentPercent"
 )
+social_extreme_trend_result <- add_bayesian_trend_evidence(
+  trend_table = social_extreme_trend_result, source_data = social_extreme_overall_alignment, y_col = "AlignmentPercent"
+)
+social_overall_trend_result <- bind_rows(social_human_trend_result, social_extreme_trend_result)
+
+# 5.2) Overall alignment difference: Extremeness minus Human baseline
+# This is the same baseline-gap definition used in the three domain analyses.
+# A positive value indicates greater alignment with the extremeness reference;
+# the primary test evaluates whether this difference changes with GPT generation.
+# One overall Spearman test; no multiple-comparison correction.
+social_overall_difference <- social_overall_alignment %>%
+  select(Agent, Generation, Baseline, AlignmentPercent) %>%
+  pivot_wider(names_from = Baseline, values_from = AlignmentPercent) %>%
+  mutate(
+    AlignmentDifference = `Extremeness alignment` - `Human baseline`
+  ) %>%
+  arrange(Generation)
+
+if(nrow(social_overall_difference) != length(model_order) ||
+   any(!complete.cases(social_overall_difference))){
+  stop("Incomplete overall alignment-difference profile: check the dual-reference input data.")
+}
+
+social_difference_test <- cor.test(
+  social_overall_difference$Generation,
+  social_overall_difference$AlignmentDifference,
+  method = "spearman", exact = FALSE
+)
+
+social_difference_trend_result <- data.frame(
+  Analysis = "Extremeness minus Human baseline alignment",
+  N_Models = sum(complete.cases(social_overall_difference$Generation,
+                                social_overall_difference$AlignmentDifference)),
+  Spearman_rho = unname(social_difference_test$estimate),
+  p_value = social_difference_test$p.value,
+  Significant = social_difference_test$p.value <= 0.050,
+  Direction = case_when(
+    unname(social_difference_test$estimate) > 0 ~ "Increasing relative extremeness alignment",
+    unname(social_difference_test$estimate) < 0 ~ "Increasing relative human baseline alignment",
+    TRUE ~ "No monotonic direction"
+  )
+)
+
+# As in the original code, report BF10 only for a nonsignificant trend.
+# No gap confidence interval is fabricated from human-only bootstrap results.
+social_difference_trend_result <- add_bayesian_trend_evidence(
+  trend_table = social_difference_trend_result,
+  source_data = social_overall_difference,
+  y_col = "AlignmentDifference"
+)
+
+# 5.3) Leave-one-domain-out robustness check
+# Recompute the equally weighted composite with two remaining domains.
+# Three omissions are tested separately for each reference, using
+# unadjusted p-values (no multiple-comparison correction).
+domain_levels <- c("Adaptive cues", "Social inference", "Normative reasoning")
+social_loo_scores <- purrr::map_dfr(domain_levels, function(removed_domain){
+  social_module_alignment %>%
+    filter(as.character(Module) != removed_domain) %>%
+    group_by(Agent, Generation, Baseline) %>%
+    summarise(
+      N_Modules = n(), AlignmentPercent = mean(AlignmentPercent), .groups = "drop"
+    ) %>%
+    mutate(ExcludedDomain = removed_domain,
+           RetainedDomains = paste(setdiff(domain_levels, removed_domain), collapse = " + "))
+})
+
+social_loo_trend_result <- social_loo_scores %>%
+  group_by(Baseline, ExcludedDomain, RetainedDomains) %>%
+  summarise(
+    N_Models = sum(complete.cases(Generation, AlignmentPercent)),
+    Spearman_rho = unname(cor.test(Generation, AlignmentPercent,
+                                   method = "spearman", exact = FALSE)$estimate),
+    p_value = cor.test(Generation, AlignmentPercent,
+                       method = "spearman", exact = FALSE)$p.value,
+    BF10 = if(is.finite(p_value) && p_value > 0.05){
+      bayesian_rank_correlation_bf10(Generation, AlignmentPercent)
+    } else { NA_real_ },
+    .groups = "drop"
+  ) %>%
+  mutate(Significant = p_value <= 0.050) %>%
+  left_join(social_overall_trend_result %>%
+              select(Baseline, Full_3Domain_rho = Spearman_rho,
+                     Full_3Domain_p = p_value), by = "Baseline") %>%
+  mutate(
+    DirectionConsistent = sign(Spearman_rho) == sign(Full_3Domain_rho),
+    BF01 = ifelse(is.na(BF10), NA_real_, 1 / BF10)
+  ) %>%
+  select(Baseline, ExcludedDomain, RetainedDomains, N_Models,
+         Full_3Domain_rho, Full_3Domain_p, Spearman_rho, p_value,
+         Significant, BF10, BF01, DirectionConsistent) %>%
+  arrange(Baseline, match(ExcludedDomain, domain_levels))
+
+# Also retain the actual nine-model scores for transparency/reproducibility.
+# The trend sheet above is the requested supplementary robustness report.
 
 
 # 6) Export analysis results
 write.xlsx(
   list(
-    Alignment_By_Domain = social_module_alignment, Alignment_Overall = social_overall_alignment,
-    Alignment_Overall_Trend = social_human_trend_result
+    Alignment_By_Domain = social_module_alignment,
+    Alignment_Overall = social_overall_alignment,
+    Alignment_Overall_Trend = social_overall_trend_result,
+    Alignment_Difference = social_overall_difference,
+    Alignment_Difference_Trend = social_difference_trend_result,
+    LOO_Domain_Robustness = social_loo_trend_result,
+    LOO_Domain_Scores = social_loo_scores
   ), file = file.path(output_dir, "Results_SocialRat.xlsx"), overwrite = TRUE
 )
-message("Overall Social Rationality Human-alignment analysis completed.")
+message("Overall Social Rationality dual-reference alignment analysis completed.")
 message("Results saved to: ", file.path(output_dir, "Results_SocialRat.xlsx"))
 
 
@@ -303,57 +458,92 @@ figure_text_size <- 6 / ggplot2::.pt
 
 # 7.2) Prepare plot data
 social_trajectory_plot <- social_overall_alignment %>%
-  select(Agent, Generation, AlignmentPercent) %>%
-  arrange(Generation)
+  mutate(Baseline = factor(Baseline,
+                           levels = c("Human baseline", "Extremeness alignment"))) %>%
+  select(Agent, Generation, Baseline, AlignmentPercent) %>%
+  arrange(Baseline, Generation)
 
-# 7.3) Extract significance flag
+# 7.3) Extract significance flags
 social_human_significant <- social_human_trend_result$Significant[1]
+social_extreme_significant <- social_extreme_trend_result$Significant[1]
 
 # 7.4) Base trajectory panel
-pan_social_line <- ggplot(social_trajectory_plot, aes(x = Generation, y = AlignmentPercent)) +
+pan_social_line <- ggplot(
+  social_trajectory_plot,
+  aes(x = Generation, y = AlignmentPercent,
+      color = Baseline, shape = Baseline, group = Baseline)
+) +
   geom_hline(yintercept = 100, linetype = "dashed", linewidth = 0.30, color = reference_color)
 
-# 7.5) Add significant Human-alignment trend
+# 7.5) Fitted trend lines only when the corresponding test is significant.
 if(length(social_human_significant) == 1 && isTRUE(social_human_significant)){
   pan_social_line <- pan_social_line +
     geom_smooth(
-      aes(x = Generation, y = AlignmentPercent),
-      method = "lm",
-      formula = y ~ x,
-      se = FALSE,
-      linewidth = 0.90,
-      color = blue_trend_color,
-      show.legend = FALSE
+      data = social_trajectory_plot %>% filter(Baseline == "Human baseline"),
+      aes(x = Generation, y = AlignmentPercent), inherit.aes = FALSE,
+      method = "lm", formula = y ~ x, se = FALSE,
+      linewidth = 0.90, color = blue_trend_color, show.legend = FALSE
     )
-
+}
+if(length(social_extreme_significant) == 1 && isTRUE(social_extreme_significant)){
+  pan_social_line <- pan_social_line +
+    geom_smooth(
+      data = social_trajectory_plot %>% filter(Baseline == "Extremeness alignment"),
+      aes(x = Generation, y = AlignmentPercent), inherit.aes = FALSE,
+      method = "lm", formula = y ~ x, se = FALSE,
+      linewidth = 0.90, color = green_trend_color, show.legend = FALSE
+    )
 }
 
-# 7.6) Add raw trajectory, points, labels, scales, and theme
+# 7.6) Both raw trajectories, labels, scales, and original theme
 pan_social_line <- pan_social_line +
-  geom_line(color = blue_color, linewidth = 0.48) +
-  geom_point(color = blue_color, shape = 1, size = 1.75, stroke = 0.70) +
+  geom_line(linewidth = 0.48) +
+  geom_point(size = 1.75, stroke = 0.70) +
   geom_text(
-    aes(x = Generation, y = AlignmentPercent, label = sprintf("%.1f%%", AlignmentPercent)),
-    color = blue_color,
-    size = figure_text_size,
-    vjust = -1.00,
-    show.legend = FALSE
+    data = social_trajectory_plot %>% filter(Baseline == "Human baseline"),
+    aes(x = Generation, y = AlignmentPercent,
+        label = sprintf("%.1f%%", AlignmentPercent)),
+    inherit.aes = FALSE, color = blue_color,
+    size = figure_text_size, vjust = -1.00, show.legend = FALSE
   ) +
-  scale_x_continuous(breaks = 1:9, labels = model_labels, expand = expansion(mult = c(0.025, 0.025))) +
-  scale_y_continuous(
-    breaks = seq(0, 100, by = 25),
-    labels = scales::label_number(suffix = "%"),
-    expand = expansion(mult = c(0, 0.02))
+  geom_text(
+    data = social_trajectory_plot %>% filter(Baseline == "Extremeness alignment"),
+    aes(x = Generation, y = AlignmentPercent,
+        label = sprintf("%.1f%%", AlignmentPercent)),
+    inherit.aes = FALSE, color = green_color,
+    size = figure_text_size, vjust = 1.45, show.legend = FALSE
   ) +
+  scale_color_manual(
+    values = c("Human baseline" = blue_color,
+               "Extremeness alignment" = green_color),
+    labels = c("Human Baseline Alignment", "Extremeness Alignment")
+  ) +
+  scale_shape_manual(
+    values = c("Human baseline" = 1,
+               "Extremeness alignment" = 2),
+    labels = c("Human Baseline Alignment", "Extremeness Alignment")
+  ) +
+  scale_x_continuous(breaks = 1:9, labels = model_labels,
+                     expand = expansion(mult = c(0.025, 0.025))) +
+  scale_y_continuous(breaks = seq(0, 100, by = 25),
+                     labels = scales::label_number(suffix = "%"),
+                     expand = expansion(mult = c(0, 0.02))) +
   coord_cartesian(ylim = c(0, 105), clip = "off") +
-  labs(tag = "a", title = "Social rationality", x = "LLM generation", y = "Alignment percentage") +
+  labs(tag = "a", title = "Social rationality", x = "LLM generation",
+       y = "Alignment percentage", color = NULL, shape = NULL) +
   theme_classic(base_size = 6) +
   theme(
     axis.text.x = element_text(angle = 35, hjust = 1, vjust = 1, color = "black", size = 6),
     axis.title.x = element_text(color = "black", size = 6),
     axis.text.y = element_text(color = "black", size = 6),
     axis.title.y = element_text(color = "black", size = 6),
-    legend.position = "none",
+    legend.position = c(0.50, 0.13),
+    legend.direction = "vertical",
+    legend.justification = c(0.5, 0),
+    legend.background = element_blank(),
+    legend.key.width = grid::unit(0.70, "lines"),
+    legend.key.height = grid::unit(0.70, "lines"),
+    legend.text = element_text(size = 6),
     plot.title.position = "panel",
     plot.title = element_text(size = 6, face = "bold", hjust = 0.5),
     plot.tag = element_text(face = "bold", size = 6),
@@ -367,15 +557,19 @@ pan_social_line
 # 8) Radar visualization
 # Radar scores are expressed as proportions from 0 to 1.
 #
-# Each radar contains only one Human-alignment polygon.
-# The outer boundary (100%) represents perfect empirical-Human alignment.
+# Each radar overlays Human baseline (blue) and Extremeness alignment (green).
+# The outer grid boundary is 100% alignment to the corresponding reference.
 radar_profile_all <- social_profile %>%
   mutate(
     Agent = factor(Agent, levels = model_order),
     AdaptiveCueHuman = AdaptiveCueHuman / 100,
     SocialInferenceHuman = SocialInferenceHuman / 100,
     NormativeReasoningHuman = NormativeReasoningHuman / 100,
-    OverallHumanAlignment = OverallHumanAlignment / 100
+    AdaptiveCueExtreme = AdaptiveCueExtreme / 100,
+    SocialInferenceExtreme = SocialInferenceExtreme / 100,
+    NormativeReasoningExtreme = NormativeReasoningExtreme / 100,
+    OverallHumanAlignment = OverallHumanAlignment / 100,
+    OverallExtremeAlignment = OverallExtremeAlignment / 100
   ) %>%
   arrange(Agent)
 
@@ -397,9 +591,18 @@ make_radar_plot <- function(current_model, show_b = FALSE){
     as.numeric(current_model$NormativeReasoningHuman)
   )
 
-  # Human-alignment coordinates
+  # Existing extreme-reference values in the same three axes
+  extreme_values <- c(
+    as.numeric(current_model$AdaptiveCueExtreme),
+    as.numeric(current_model$SocialInferenceExtreme),
+    as.numeric(current_model$NormativeReasoningExtreme)
+  )
+
+  # Human and extreme-reference coordinates
   human_data <- radar_axes %>%
     mutate(Value = human_values, x = radar_scale * Value * cos(Angle), y = radar_scale * Value * sin(Angle))
+  extreme_data <- radar_axes %>%
+    mutate(Value = extreme_values, x = radar_scale * Value * cos(Angle), y = radar_scale * Value * sin(Angle))
 
   # Simplified radar grid
   grid_levels <- c(0.50, 1.00)
@@ -432,6 +635,14 @@ make_radar_plot <- function(current_model, show_b = FALSE){
     geom_path(data = radar_grid_closed, aes(x = x, y = y, group = Radius), linewidth = 0.18, color = "grey88") +
     geom_segment(data = radar_spokes, aes(x = 0, y = 0, xend = xend, yend = yend), linewidth = 0.18, color = "grey85") +
     geom_polygon(
+      data = extreme_data,
+      aes(x = x, y = y),
+      fill = green_color,
+      color = green_color,
+      alpha = 0.12,
+      linewidth = 0.45
+    ) +
+    geom_polygon(
       data = human_data,
       aes(x = x, y = y),
       fill = blue_color,
@@ -439,7 +650,6 @@ make_radar_plot <- function(current_model, show_b = FALSE){
       alpha = 0.12,
       linewidth = 0.45
     ) +
-    geom_point(data = human_data, aes(x = x, y = y), shape = 1, size = 0.9, stroke = 0.4, color = blue_color) +
     geom_text(data = adaptive_label, aes(x = x, y = y, label = Label), size = 1.10, color = "black") +
     geom_text(
       data = social_label,
